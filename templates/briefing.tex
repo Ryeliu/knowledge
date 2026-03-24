@@ -1,0 +1,81 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{geometry}
+\usepackage{titlesec}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+\geometry{top=2cm, bottom=2cm, left=2.5cm, right=2.5cm}
+
+% 颜色定义
+\definecolor{accent}{HTML}{2C5F8A}
+\definecolor{lightgray}{HTML}{F5F5F5}
+\definecolor{midgray}{HTML}{888888}
+
+% 字体（MacTeX 自带）
+\setmainfont{Helvetica Neue}
+\setCJKmainfont{PingFang SC}
+
+% 标题样式
+\titleformat{\section}{\large\bfseries\color{accent}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries}{}{0em}{}
+
+% 页眉页脚
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\textcolor{midgray}{\small 会前简报}}
+\lhead{\textcolor{midgray}{\small \VAR{project_name}}}
+\rfoot{\textcolor{midgray}{\small \thepage}}
+\lfoot{\textcolor{midgray}{\small \VAR{date}}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\begin{document}
+
+% 标题块
+\begin{center}
+  {\LARGE\bfseries\color{accent} \VAR{project_name}}\\[0.3em]
+  {\large 会前简报}\\[0.2em]
+  {\textcolor{midgray}{\VAR{date}}}
+\end{center}
+
+\vspace{1em}
+\noindent\rule{\textwidth}{1.5pt}
+\vspace{0.5em}
+
+% 参会人员
+\section{参会人员}
+
+\begin{tabular}{>{\bfseries}p{3cm} p{5cm} p{6cm}}
+\toprule
+姓名 & 职位 & 备注 \\
+\midrule
+\VAR{participants_table}
+\bottomrule
+\end{tabular}
+
+% 项目背景
+\section{项目背景}
+
+\VAR{project_background}
+
+% 历史会议要点
+\section{历史会议要点}
+
+\VAR{meeting_history}
+
+% 本次议题
+\section{本次议题}
+
+\VAR{agenda}
+
+% 待跟进事项
+\section{待跟进事项}
+
+\VAR{pending_items}
+
+\end{document}

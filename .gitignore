@@ -1,0 +1,26 @@
+# ── 知识数据（私有）──
+companies/
+meetings/
+people.md
+projects.md
+graph.json
+参考.webp
+
+# ── 运行时生成 ──
+inbox/
+output/
+voiceprints/
+__pycache__/
+*.pyc
+
+# ── 日志和凭证 ──
+scripts/*.log
+scripts/wechat_qr.png
+.env
+*.env
+
+# ── 系统文件 ──
+.DS_Store
+
+# ── Claude Code 本地配置 ──
+.claude/

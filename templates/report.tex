@@ -1,0 +1,81 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{geometry}
+\usepackage{titlesec}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+
+\geometry{top=2cm, bottom=2cm, left=2.5cm, right=2.5cm}
+
+\definecolor{accent}{HTML}{2C5F8A}
+\definecolor{success}{HTML}{2E7D32}
+\definecolor{warning}{HTML}{E65100}
+\definecolor{midgray}{HTML}{888888}
+\definecolor{lightgray}{HTML}{F5F5F5}
+
+\setmainfont{Helvetica Neue}
+\setCJKmainfont{PingFang SC}
+
+\titleformat{\section}{\large\bfseries\color{accent}}{}{0em}{}[\titlerule]
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\textcolor{midgray}{\small 项目状态报告}}
+\lhead{\textcolor{midgray}{\small \VAR{project_name}}}
+\rfoot{\textcolor{midgray}{\small \thepage}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries\color{accent} \VAR{project_name}}\\[0.3em]
+  {\large 项目状态报告}\\[0.2em]
+  {\textcolor{midgray}{生成于 \VAR{date}}}
+\end{center}
+
+\vspace{0.5em}
+\noindent\rule{\textwidth}{1.5pt}
+\vspace{0.5em}
+
+% 状态摘要
+\section{状态摘要}
+
+\begin{tabular}{>{\bfseries}p{3cm} p{10cm}}
+当前状态 & \VAR{status} \\
+我的角色 & \VAR{my_role} \\
+开始时间 & \VAR{start_date} \\
+关键联系人 & \VAR{key_contacts} \\
+\end{tabular}
+
+% 最新进展
+\section{最新进展}
+
+\VAR{latest_progress}
+
+% 参与人员
+\section{参与人员}
+
+\begin{tabular}{>{\bfseries}p{3cm} p{4cm} p{6cm}}
+\toprule
+姓名 & 公司/职位 & 角色 \\
+\midrule
+\VAR{people_table}
+\bottomrule
+\end{tabular}
+
+% 会议时间线
+\section{会议时间线}
+
+\VAR{meeting_timeline}
+
+% 待办事项
+\section{待办事项}
+
+\VAR{todo_items}
+
+\end{document}
