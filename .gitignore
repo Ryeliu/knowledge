@@ -1,6 +1,7 @@
 # ── 知识数据（私有）──
 companies/
 meetings/
+chats/
 people.md
 projects.md
 graph.json

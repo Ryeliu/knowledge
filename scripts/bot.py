@@ -12,6 +12,7 @@ from pathlib import Path
 
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from chat_context import ChatSession
 
 # 读取配置
 env_path = Path.home() / ".knowledge_bot.env"
@@ -31,6 +32,9 @@ CLAUDE_BIN = str(Path.home() / ".local" / "bin" / "claude")
 
 # 确保 inbox 目录存在
 INBOX_DIR.mkdir(parents=True, exist_ok=True)
+
+# 对话上下文管理
+chat_session = ChatSession("telegram")
 
 
 def is_authorized(update: Update) -> bool:
@@ -84,14 +88,19 @@ async def send_new_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def process_with_claude(update: Update, prompt: str):
+async def process_with_claude(update: Update, prompt: str, use_context: bool = True):
     """通用：调用 Claude Code 并回复结果"""
+    if use_context:
+        prompt = chat_session.on_message(prompt)
+
     await update.message.reply_text("⏳ 处理中…")
 
     try:
         response = await asyncio.get_event_loop().run_in_executor(
             None, run_claude, prompt
         )
+        if use_context:
+            chat_session.on_response(response)
         await reply_long_text(update.message, response)
         await send_new_files(update, None)
 

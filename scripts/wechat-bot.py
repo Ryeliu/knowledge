@@ -18,6 +18,7 @@ from pathlib import Path
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
+from chat_context import ChatSession
 
 # ─── 日志 ───────────────────────────────────────────────
 
@@ -436,6 +437,9 @@ def send_typing(token, context_token, to_user_id):
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".wma", ".opus", ".silk"}
 
+# 对话上下文管理
+chat_session = ChatSession("wechat")
+
 
 def save_last_contact(context_token, user_id):
     """保存最近一次联系人信息，供外部脚本发文件用"""
@@ -504,12 +508,15 @@ def handle_text(token, msg, content):
     send_typing(token, context_token, from_user)
     log.info("收到文本: %s", content[:100])
 
-    # 如果用户可能想要文件，在 prompt 中附带发文件的说明
-    prompt = content + SEND_FILE_HINT
+    # 构建带上下文的 prompt
+    context_prompt = chat_session.on_message(content)
+    log.info("会话消息数: %d, prompt前200字: %s", len(chat_session.messages), context_prompt[:200])
+    prompt = context_prompt + SEND_FILE_HINT
     before_time = time.time()
 
     try:
         response = run_claude(prompt)
+        chat_session.on_response(response)
         send_text(token, context_token, from_user, response)
         # Claude 执行完后检查队列和新输出文件
         process_send_queue(token, context_token, from_user)

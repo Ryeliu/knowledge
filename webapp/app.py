@@ -106,36 +106,89 @@ def md_to_html(text):
     return markdown.markdown(text, extensions=["tables", "fenced_code", "nl2br"])
 
 
-def parse_people():
-    """解析 people.md，返回 [{name, fields, raw}]"""
-    text = (KB / "people.md").read_text(encoding="utf-8")
-    entries = []
-    for block in re.split(r"(?=^## )", text, flags=re.M):
-        m = re.match(r"^## (.+)", block)
-        if not m:
+def _get_entities_by_type(entity_type: str) -> list:
+    """从 ChromaDB 获取指定类型的所有实体，去重返回 [{name, fields, raw}]"""
+    client = _get_chroma()
+    if not client:
+        return []
+    try:
+        collection = client.get_collection(COLLECTION_NAME)
+        results = collection.get(
+            where={"type": {"$eq": entity_type}},
+            include=["documents", "metadatas"],
+        )
+    except Exception:
+        return []
+
+    # Deduplicate by entity_name, merge chunks
+    seen = {}
+    for i, doc_id in enumerate(results["ids"]):
+        meta = results["metadatas"][i]
+        text = results["documents"][i]
+        name = meta.get("entity_name", "")
+        if not name:
             continue
-        name = m.group(1).strip()
-        fields = {}
-        for fm in re.finditer(r"- \*\*(.+?)\*\*：(.+)", block):
-            fields[fm.group(1)] = fm.group(2).strip()
-        entries.append({"name": name, "fields": fields, "raw": block.strip()})
-    return entries
+        if name not in seen:
+            # Parse fields from the chunk text
+            fields = {}
+            for fm in re.finditer(r"- \*\*(.+?)\*\*：(.+)", text):
+                fields[fm.group(1)] = fm.group(2).strip()
+            seen[name] = {
+                "name": name,
+                "fields": fields,
+                "raw": text,
+                "company": meta.get("companies", ""),
+            }
+        else:
+            # Merge additional fields from other chunks
+            for fm in re.finditer(r"- \*\*(.+?)\*\*：(.+)", text):
+                if fm.group(1) not in seen[name]["fields"]:
+                    seen[name]["fields"][fm.group(1)] = fm.group(2).strip()
+            seen[name]["raw"] += "\n\n" + text
+
+    return sorted(seen.values(), key=lambda x: x["name"])
 
 
-def parse_projects():
-    """解析 projects.md，返回 [{name, fields, raw}]"""
-    text = (KB / "projects.md").read_text(encoding="utf-8")
-    entries = []
-    for block in re.split(r"(?=^## )", text, flags=re.M):
-        m = re.match(r"^## (.+)", block)
-        if not m:
-            continue
-        name = m.group(1).strip()
-        fields = {}
-        for fm in re.finditer(r"- \*\*(.+?)\*\*：(.+)", block):
-            fields[fm.group(1)] = fm.group(2).strip()
-        entries.append({"name": name, "fields": fields, "raw": block.strip()})
-    return entries
+def _find_entity(name: str, entity_type: str) -> dict | None:
+    """用语义搜索找到某个实体的详情"""
+    client = _get_chroma()
+    model = _get_embed_model()
+    if not client or not model:
+        return None
+    try:
+        collection = client.get_collection(COLLECTION_NAME)
+    except Exception:
+        return None
+
+    embedding = model.encode([name], normalize_embeddings=True, batch_size=1).tolist()
+    results = collection.query(
+        query_embeddings=embedding,
+        n_results=5,
+        where={"type": {"$eq": entity_type}},
+        include=["documents", "metadatas"],
+    )
+
+    if not results["ids"][0]:
+        return None
+
+    # Find best match by name
+    for i, doc_id in enumerate(results["ids"][0]):
+        meta = results["metadatas"][0][i]
+        text = results["documents"][0][i]
+        entity_name = meta.get("entity_name", "")
+        if entity_name == name or name in entity_name or entity_name in name:
+            fields = {}
+            for fm in re.finditer(r"- \*\*(.+?)\*\*：(.+)", text):
+                fields[fm.group(1)] = fm.group(2).strip()
+            return {"name": entity_name, "fields": fields, "raw": text}
+
+    # Fallback to first result
+    meta = results["metadatas"][0][0]
+    text = results["documents"][0][0]
+    fields = {}
+    for fm in re.finditer(r"- \*\*(.+?)\*\*：(.+)", text):
+        fields[fm.group(1)] = fm.group(2).strip()
+    return {"name": meta.get("entity_name", name), "fields": fields, "raw": text}
 
 
 def list_companies():
@@ -279,14 +332,9 @@ def _build_graph_from_chromadb():
 
 @app.route("/api/graph")
 def api_graph():
-    # Try ChromaDB first, fallback to graph.json
     graph = _build_graph_from_chromadb()
     if graph:
         return jsonify(graph)
-    graph_file = KB / "graph.json"
-    if graph_file.exists():
-        data = json.loads(graph_file.read_text(encoding="utf-8"))
-        return jsonify(data)
     return jsonify({"companies": {}, "people": {}, "projects": {}, "meetings": {}})
 
 
@@ -294,8 +342,8 @@ def api_graph():
 def api_stats():
     return jsonify({
         "companies": len(list_companies()),
-        "people": len(parse_people()),
-        "projects": len(parse_projects()),
+        "people": len(_get_entities_by_type("person")),
+        "projects": len(_get_entities_by_type("project")),
         "meetings": len(list_meetings()),
     })
 
@@ -309,7 +357,8 @@ def api_system():
             "status": "online",
             "tools": [
                 {"name": "search_knowledge", "desc": "语义搜索知识库 (ChromaDB + bge-m3)", "icon": "🔍"},
-                {"name": "index_knowledge", "desc": "重建向量索引", "icon": "📇"},
+                {"name": "index_knowledge", "desc": "全量重建向量索引", "icon": "📇"},
+                {"name": "upsert_knowledge", "desc": "增量更新向量索引", "icon": "📝"},
                 {"name": "transcribe_audio", "desc": "Whisper 语音转写 + 说话人分离", "icon": "🎙️"},
                 {"name": "register_voiceprint", "desc": "声纹注册与识别", "icon": "🔊"},
                 {"name": "generate_image", "desc": "Gemini 文生图", "icon": "🎨"},
@@ -346,27 +395,27 @@ def api_company(name):
 
 @app.route("/api/people")
 def api_people():
-    return jsonify(parse_people())
+    return jsonify(_get_entities_by_type("person"))
 
 
 @app.route("/api/person/<name>")
 def api_person(name):
-    for p in parse_people():
-        if p["name"] == name or name in p["name"]:
-            return jsonify({"name": p["name"], "fields": p["fields"], "html": md_to_html(p["raw"])})
+    entity = _find_entity(name, "person")
+    if entity:
+        return jsonify({"name": entity["name"], "fields": entity["fields"], "html": md_to_html(entity["raw"])})
     return jsonify({"error": "not found"}), 404
 
 
 @app.route("/api/projects")
 def api_projects():
-    return jsonify(parse_projects())
+    return jsonify(_get_entities_by_type("project"))
 
 
 @app.route("/api/project/<name>")
 def api_project(name):
-    for p in parse_projects():
-        if p["name"] == name or name in p["name"]:
-            return jsonify({"name": p["name"], "fields": p["fields"], "html": md_to_html(p["raw"])})
+    entity = _find_entity(name, "project")
+    if entity:
+        return jsonify({"name": entity["name"], "fields": entity["fields"], "html": md_to_html(entity["raw"])})
     return jsonify({"error": "not found"}), 404
 
 
