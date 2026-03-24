@@ -9,10 +9,12 @@ Claude Code (Opus 4.6 · 1M context)
 ├── CLAUDE.md          ← Natural language rules that drive all operations
 ├── Scripts
 │   ├── bot.py         ← Telegram Bot (receive messages/files → Claude Code → reply)
-│   └── wechat-bot.py  ← WeChat iLink Bot (same pattern, WeChat protocol)
+│   ├── wechat-bot.py  ← WeChat iLink Bot (same pattern, WeChat protocol)
+│   └── chat_context.py ← Session management (--resume reuse, auto-expiry summaries)
 ├── MCP Tools
 │   ├── search_knowledge()    ← Semantic search (ChromaDB + bge-m3)
 │   ├── index_knowledge()     ← Rebuild vector index
+│   ├── upsert_knowledge()    ← Incremental index update (MD5 diff)
 │   ├── transcribe_audio()    ← Whisper + pyannote speaker diarization
 │   ├── register_voiceprint() ← Speaker identification
 │   └── generate_image()      ← Gemini image generation
@@ -30,6 +32,7 @@ Claude Code (Opus 4.6 · 1M context)
 - **Natural Language Operations** — Talk to Claude Code to ingest, query, and manage knowledge. Rules defined in `CLAUDE.md`.
 - **Semantic Search** — ChromaDB + BAAI/bge-m3 embeddings. Search by meaning, not just keywords. Filter by company, person, or entity type.
 - **Multi-Channel Input** — Telegram Bot, WeChat iLink Bot, or direct CLI. Send text, files, audio, images, video.
+- **Conversation Context** — Within a 30-minute session, messages reuse the same Claude session (`--resume`), so follow-up questions are faster and context-aware. Sessions auto-expire with a Claude-generated summary saved to `chats/`.
 - **Meeting Transcription** — Whisper large-v3 + pyannote speaker diarization + voiceprint matching. Auto-generates structured meeting notes.
 - **File Archival** — Drop files into `inbox/`, run `/archive`, and they're automatically categorized and filed under the right company.
 - **PDF Generation** — LaTeX templates + xelatex for professional briefings and reports (Chinese typography with PingFang SC).
@@ -91,6 +94,7 @@ knowledge/
 │       ├── README.md      # Company profile + contacts + projects
 │       └── *.pdf          # Attachments
 ├── meetings/              # Meeting notes (YYYY-MM-DD-title.md)
+├── chats/                 # Auto-generated conversation summaries
 ├── inbox/                 # File staging area
 │   ├── audio/             # Audio files for transcription
 │   └── files/             # Documents for archival
@@ -114,7 +118,7 @@ knowledge/
 
 ## How It Works
 
-The core idea: **CLAUDE.md is the brain**. It defines how Claude Code should handle every operation — ingestion, querying, PDF generation. The bots (Telegram/WeChat) are just input/output channels that pipe messages through `claude -p`.
+The core idea: **CLAUDE.md is the brain**. It defines how Claude Code should handle every operation — ingestion, querying, PDF generation. The bots (Telegram/WeChat) are input/output channels that pipe messages through `claude -p`, with session reuse (`--resume`) for multi-turn conversations within the same 30-minute window.
 
 When you send a message like "录入：今天和张三开了个会讨论了新项目", Claude Code:
 1. Parses the input

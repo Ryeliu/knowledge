@@ -2,7 +2,7 @@
 对话上下文管理 — Telegram/微信 Bot 共用模块
 
 功能：
-- 维护当前会话的对话历史（内存）
+- 复用 Claude 会话（--resume），同一轮对话只启动一次 CLI
 - 30 分钟无消息自动结束会话
 - 会话结束时调用 Claude 生成对话纪要，保存到 chats/
 - 新会话开始时加载上次对话摘要作为背景
@@ -10,6 +10,7 @@
 
 import json
 import logging
+import re
 import subprocess
 import threading
 import time
@@ -17,9 +18,9 @@ from datetime import datetime
 from pathlib import Path
 
 SESSION_TIMEOUT = 1800  # 30 分钟
-EXPIRY_CHECK_INTERVAL = 60  # 每 60 秒检查一次超时
+EXPIRY_CHECK_INTERVAL = 60  # 超时后额外等 60 秒再检查
 MAX_ROUNDS = 10
-SUMMARY_MAX_CHARS = 200  # 历史中每条回复最多保留的字符数
+SUMMARY_MAX_CHARS = 200  # 纪要中每条回复最多保留的字符数
 
 log = logging.getLogger("chat_context")
 
@@ -30,8 +31,19 @@ CLAUDE_BIN = str(Path.home() / ".local" / "bin" / "claude")
 CHATS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _run_claude_raw(args, timeout=300):
+    """执行 claude CLI 并返回 subprocess.CompletedProcess"""
+    return subprocess.run(
+        [CLAUDE_BIN] + args,
+        cwd=str(KNOWLEDGE_DIR),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
 class ChatSession:
-    """管理单个 Bot 的对话上下文"""
+    """管理单个 Bot 的对话上下文，复用 Claude 会话"""
 
     def __init__(self, source: str):
         """
@@ -42,13 +54,18 @@ class ChatSession:
         self.messages = []  # [(timestamp, "user"/"assistant", content)]
         self.last_active = 0
         self.session_start = 0
+        self.session_id = None  # Claude CLI session ID
         self._lock = threading.Lock()
         self._timer = None
 
-    def on_message(self, user_msg: str) -> str:
+    def run_claude(self, user_msg: str, extra_prompt: str = "") -> str:
         """
-        处理新消息，返回带上下文的 prompt。
-        如果会话超时，先保存纪要再开启新会话。
+        处理用户消息并调用 Claude，返回回复文本。
+        同一轮对话内复用 Claude 会话（--resume）。
+
+        Args:
+            user_msg: 用户原始消息
+            extra_prompt: 附加指令（如 SEND_FILE_HINT），仅首条消息发送
         """
         now = time.time()
 
@@ -59,28 +76,85 @@ class ChatSession:
                 self._reset()
 
             # 新会话开始
-            if not self.messages:
+            is_new_session = not self.messages
+            if is_new_session:
                 self.session_start = now
-
-            # 构建带上下文的 prompt
-            prompt = self._build_prompt(user_msg)
 
             # 记录用户消息
             self.messages.append((now, "user", user_msg))
             self.last_active = now
-
-            # 滚动丢弃超过 MAX_ROUNDS 的旧消息（一轮 = user + assistant）
             self._trim()
 
-        self._schedule_expiry_check()
-        return prompt
+            # 当前会话的 session_id（可能为 None）
+            sid = self.session_id
 
-    def on_response(self, response: str):
-        """记录 Claude 的回复"""
-        now = time.time()
+        # 构建 prompt
+        if is_new_session:
+            # 首条消息：加上次纪要摘要 + extra_prompt
+            parts = []
+            last_summary = self._load_last_summary()
+            if last_summary:
+                parts.append(f"[上次对话背景]\n{last_summary}\n")
+            parts.append(user_msg)
+            if extra_prompt:
+                parts.append(extra_prompt)
+            prompt = "\n".join(parts)
+        else:
+            # 后续消息：只发当前消息（Claude 已有上下文）
+            prompt = user_msg
+
+        # 调用 Claude
+        response, new_sid = self._call_claude(prompt, sid)
+
         with self._lock:
-            self.messages.append((now, "assistant", response))
-            self.last_active = now
+            if new_sid:
+                self.session_id = new_sid
+            self.messages.append((time.time(), "assistant", response))
+            self.last_active = time.time()
+
+        self._schedule_expiry_check()
+        log.info("Claude 回复（session=%s, 新会话=%s）: %s...",
+                 self.session_id, is_new_session, response[:80])
+        return response
+
+    def _call_claude(self, prompt: str, session_id: str = None) -> tuple:
+        """
+        调用 Claude CLI，返回 (response_text, session_id)。
+        如果有 session_id 则用 --resume 复用会话。
+        """
+        args = ["-p", "--output-format", "json"]
+        if session_id:
+            args += ["--resume", session_id]
+        args.append(prompt)
+
+        try:
+            result = _run_claude_raw(args, timeout=300)
+            if result.returncode != 0:
+                log.error("Claude CLI 错误 (rc=%d): %s", result.returncode, result.stderr[:200])
+                # 如果 resume 失败，尝试不带 resume 重试
+                if session_id:
+                    log.info("resume 失败，回退到新会话")
+                    args_retry = ["-p", "--output-format", "json", prompt]
+                    result = _run_claude_raw(args_retry, timeout=300)
+
+            # 解析 JSON 输出
+            output = result.stdout.strip()
+            if output:
+                data = json.loads(output)
+                text = data.get("result", "")
+                sid = data.get("session_id", "")
+                return (text or "（无输出）", sid)
+            return ("（无输出）", None)
+
+        except json.JSONDecodeError:
+            # JSON 解析失败，fallback 用原始输出
+            log.warning("Claude 输出非 JSON，使用原始文本")
+            return (result.stdout.strip() or "（无输出）", None)
+        except subprocess.TimeoutExpired:
+            return ("（处理超时）", None)
+        except Exception as e:
+            log.error("调用 Claude 出错: %s", e)
+            return (f"（出错：{e}）", None)
 
     def _schedule_expiry_check(self):
         """启动后台定时器，超时后自动保存纪要"""
@@ -105,34 +179,6 @@ class ChatSession:
     def _is_expired(self, now: float) -> bool:
         return self.last_active > 0 and (now - self.last_active) > SESSION_TIMEOUT
 
-    def _build_prompt(self, current_msg: str) -> str:
-        """拼接历史对话 + 上次纪要 + 当前消息"""
-        parts = []
-
-        # 如果是新会话，加载上次对话摘要
-        if not self.messages:
-            last_summary = self._load_last_summary()
-            if last_summary:
-                parts.append(f"[上次对话背景]\n{last_summary}\n")
-
-        # 拼接当前会话历史
-        if self.messages:
-            history_lines = []
-            for _, role, content in self.messages:
-                if role == "user":
-                    history_lines.append(f"用户：{content}")
-                else:
-                    # 回复只保留摘要
-                    truncated = content[:SUMMARY_MAX_CHARS]
-                    if len(content) > SUMMARY_MAX_CHARS:
-                        truncated += "..."
-                    history_lines.append(f"助手：{truncated}")
-            parts.append("[对话上下文]\n" + "\n".join(history_lines) + "\n")
-
-        parts.append(f"[当前消息]\n{current_msg}")
-
-        return "\n".join(parts)
-
     def _trim(self):
         """保留最近 MAX_ROUNDS 轮（每轮 = user + assistant = 2 条）"""
         max_msgs = MAX_ROUNDS * 2
@@ -142,7 +188,6 @@ class ChatSession:
     def _save_summary(self):
         """调用 Claude 生成对话纪要并保存到 chats/"""
         if len(self.messages) < 2:
-            # 只有一条消息，不值得生成纪要
             return
 
         # 拼接完整对话
@@ -157,7 +202,7 @@ class ChatSession:
         end_time = datetime.fromtimestamp(self.last_active)
         rounds = sum(1 for _, r, _ in self.messages if r == "user")
 
-        # 调用 Claude 生成摘要
+        # 调用 Claude 生成摘要（新进程，不复用会话）
         summary_prompt = (
             "请将以下对话整理为简要纪要（100-200字），提取关键信息点和待办事项。"
             "只输出纪要内容，不要加标题或前缀。\n\n"
@@ -165,13 +210,7 @@ class ChatSession:
         )
 
         try:
-            result = subprocess.run(
-                [CLAUDE_BIN, "-p", summary_prompt],
-                cwd=str(KNOWLEDGE_DIR),
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
+            result = _run_claude_raw(["-p", summary_prompt], timeout=120)
             summary = result.stdout.strip() or "（摘要生成失败）"
         except Exception:
             summary = "（摘要生成超时）"
@@ -199,17 +238,14 @@ class ChatSession:
         if not CHATS_DIR.exists():
             return ""
 
-        # 找到最近的纪要文件（按文件名倒序）
         files = sorted(CHATS_DIR.glob(f"*-{self.source}.md"), reverse=True)
         if not files:
-            # 也尝试加载另一个 bot 的纪要
             files = sorted(CHATS_DIR.glob("*.md"), reverse=True)
         if not files:
             return ""
 
         try:
             text = files[0].read_text(encoding="utf-8")
-            # 提取 ## 摘要 后面的内容
             match = re.search(r"## 摘要\s*\n\n(.+?)(?=\n## |\Z)", text, re.DOTALL)
             if match:
                 return match.group(1).strip()
@@ -222,7 +258,4 @@ class ChatSession:
         self.messages = []
         self.last_active = 0
         self.session_start = 0
-
-
-# 需要 import re
-import re
+        self.session_id = None

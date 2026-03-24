@@ -42,21 +42,6 @@ def is_authorized(update: Update) -> bool:
     return update.effective_user.id == CHAT_ID
 
 
-def run_claude(prompt: str) -> str:
-    """在 knowledge 目录下调用 Claude Code，返回输出文本"""
-    result = subprocess.run(
-        [CLAUDE_BIN, "-p", prompt],
-        cwd=str(KNOWLEDGE_DIR),
-        capture_output=True,
-        text=True,
-        timeout=300
-    )
-    output = result.stdout.strip()
-    if result.returncode != 0 and result.stderr:
-        output += f"\n\n⚠️ 错误：{result.stderr.strip()}"
-    return output or "（无输出）"
-
-
 async def reply_long_text(message, text):
     """发送可能很长的文本，自动分片"""
     if len(text) <= 4000:
@@ -88,24 +73,17 @@ async def send_new_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def process_with_claude(update: Update, prompt: str, use_context: bool = True):
-    """通用：调用 Claude Code 并回复结果"""
-    if use_context:
-        prompt = chat_session.on_message(prompt)
-
+async def process_with_claude(update: Update, prompt: str):
+    """通用：调用 Claude Code 并回复结果（复用会话）"""
     await update.message.reply_text("⏳ 处理中…")
 
     try:
         response = await asyncio.get_event_loop().run_in_executor(
-            None, run_claude, prompt
+            None, chat_session.run_claude, prompt
         )
-        if use_context:
-            chat_session.on_response(response)
         await reply_long_text(update.message, response)
         await send_new_files(update, None)
 
-    except subprocess.TimeoutExpired:
-        await update.message.reply_text('⏰ 超时了，请稍后确认结果。')
     except Exception as e:
         await update.message.reply_text(f"❌ 出错了：{str(e)}")
 

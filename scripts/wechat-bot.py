@@ -259,23 +259,6 @@ def download_media(encrypt_query_param, aes_key_b64, save_path):
     return save_path
 
 
-# ─── Claude Code 调用 ────────────────────────────────────
-
-def run_claude(prompt):
-    """在 knowledge 目录下调用 Claude Code，返回输出文本"""
-    result = subprocess.run(
-        [CLAUDE_BIN, "-p", prompt],
-        cwd=str(KNOWLEDGE_DIR),
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    output = result.stdout.strip()
-    if result.returncode != 0 and result.stderr:
-        output += f"\n\n⚠️ 错误：{result.stderr.strip()}"
-    return output or "（无输出）"
-
-
 # ─── 消息发送 ────────────────────────────────────────────
 
 def send_text(token, context_token, to_user_id, text):
@@ -508,21 +491,14 @@ def handle_text(token, msg, content):
     send_typing(token, context_token, from_user)
     log.info("收到文本: %s", content[:100])
 
-    # 构建带上下文的 prompt
-    context_prompt = chat_session.on_message(content)
-    log.info("会话消息数: %d, prompt前200字: %s", len(chat_session.messages), context_prompt[:200])
-    prompt = context_prompt + SEND_FILE_HINT
     before_time = time.time()
 
     try:
-        response = run_claude(prompt)
-        chat_session.on_response(response)
+        response = chat_session.run_claude(content, extra_prompt=SEND_FILE_HINT)
         send_text(token, context_token, from_user, response)
         # Claude 执行完后检查队列和新输出文件
         process_send_queue(token, context_token, from_user)
         send_new_output_files(token, context_token, from_user, before_time)
-    except subprocess.TimeoutExpired:
-        send_text(token, context_token, from_user, "⏰ 处理超时，请稍后重试。")
     except Exception as e:
         log.error("处理文本出错: %s", e)
         send_text(token, context_token, from_user, f"❌ 出错了：{e}")
@@ -607,10 +583,9 @@ def handle_media(token, msg, item):
         prompt = f"用户发来了未知类型({msg_type})的消息，已保存到 {rel_path}。"
 
     try:
-        response = run_claude(prompt)
+        response = chat_session.run_claude(prompt)
         send_text(token, context_token, from_user, response)
-    except subprocess.TimeoutExpired:
-        send_text(token, context_token, from_user, "⏰ 处理超时，请稍后重试。")
+        process_send_queue(token, context_token, from_user)
     except Exception as e:
         log.error("处理媒体出错: %s", e)
         send_text(token, context_token, from_user, f"❌ 出错了：{e}")
